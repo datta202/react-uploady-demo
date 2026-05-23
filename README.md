@@ -19,6 +19,14 @@ npm run dev             # client (Vite) + server (Express :3002) together
 Open the client (Vite prints the URL). Drag in images or click **Add images** — they upload
 to the local server, show live progress, and render from the stored file URL.
 
+Run just the backend (no client): `cd server && npm install && npm start` (listens on
+`:3002`; set `PORT` to change it).
+
+**Troubleshooting** — `EADDRINUSE: :3002` means the port is taken (an old server still
+running). Free it (`lsof -ti:3002 | xargs kill`) or start with a different `PORT`. If uploaded
+images don't render back, check `PUBLIC_BASE` matches how the browser reaches the server
+(dev: `http://localhost:3002`; prod: the proxied path, e.g. `/uploady-api`).
+
 ## Backend
 
 - `POST /upload` — multipart (react-uploady's `file` field); stores to `server/uploads/`
@@ -26,7 +34,8 @@ to the local server, show live progress, and render from the stored file URL.
 - `GET /files/:name` — serves a stored file.
 - `GET /health`.
 - Limits: images only, ≤5 MB/file, ≤10/request; uploads older than ~1 h are auto-deleted
-  (ephemeral demo storage).
+  (ephemeral demo storage). The "images only" check is by the **declared** MIME type (multer
+  `fileFilter`), not by inspecting file content — fine for a demo, not a security boundary.
 - Env: `PORT` (default `3002`), `PUBLIC_BASE` (the base the browser uses to fetch files
   back — dev defaults to `http://localhost:3002`; in production set it to the proxied path,
   e.g. `/uploady-api`).
