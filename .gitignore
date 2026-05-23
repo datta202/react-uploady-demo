@@ -1,0 +1,13 @@
+node_modules
+dist
+*.local
+
+# server-uploaded files (ephemeral)
+server/uploads
+
+# logs / editor
+*.log
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea

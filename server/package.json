@@ -1,0 +1,16 @@
+{
+  "name": "react-uploady-demo-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Express + multer upload backend for the react-uploady demo.",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}
