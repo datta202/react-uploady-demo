@@ -48,6 +48,7 @@ type Item = {
   progress: number
   status: Status
   serverUrl?: string
+  error?: string
 }
 
 function kindOf(file: File): Kind {
@@ -135,6 +136,9 @@ function Manager() {
     let total = itemsRef.current.reduce((s, it) => s + it.size, 0)
 
     for (const bi of batch.items) {
+      // Retried items are re-queued through this listener — skip ones we already track
+      // (otherwise a retry would add a duplicate card with a colliding key).
+      if (itemsRef.current.some((x) => x.id === bi.id)) continue
       const file = bi.file as File
       const kind = kindOf(file)
       if (kind === 'other') {
@@ -188,7 +192,12 @@ function Manager() {
   })
 
   useItemErrorListener((item) => {
-    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, status: 'error' } : it)))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (item.uploadResponse as any)?.data
+    const msg = (data && typeof data === 'object' ? data.error : undefined) ?? 'Upload failed'
+    setItems((prev) =>
+      prev.map((it) => (it.id === item.id ? { ...it, status: 'error', error: msg } : it))
+    )
   })
 
   const remove = (it: Item) => {
@@ -371,11 +380,16 @@ function Manager() {
                   </div>
                 ) : (
                   <span
-                    className={`text-xs ${
+                    title={it.status === 'error' ? it.error : undefined}
+                    className={`block truncate text-xs ${
                       it.status === 'error' ? 'text-destructive' : 'text-muted-foreground'
                     }`}
                   >
-                    {it.status === 'done' ? 'Uploaded' : it.status === 'error' ? 'Failed' : 'Ready'}
+                    {it.status === 'done'
+                      ? 'Uploaded'
+                      : it.status === 'error'
+                        ? (it.error ?? 'Failed')
+                        : 'Ready'}
                   </span>
                 )}
               </div>
@@ -439,7 +453,7 @@ function ItemAction({ it, onRetry }: { it: Item; onRetry: () => void }) {
       <button
         type="button"
         onClick={onRetry}
-        title="Retry this upload"
+        title={it.error ? `${it.error} — click to retry` : 'Retry this upload'}
         className="inline-flex shrink-0 items-center gap-0.5 text-destructive hover:opacity-80"
       >
         <RotateCcw size={12} /> retry
