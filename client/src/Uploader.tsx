@@ -22,6 +22,8 @@ import {
   FileSpreadsheet,
   File as FileIcon,
   Trash2,
+  LayoutGrid,
+  List as ListIcon,
 } from 'lucide-react'
 
 // Where files are uploaded. Dev: the local Node server; prod: the nginx-proxied path.
@@ -36,6 +38,7 @@ const ACCEPT =
 
 type Kind = 'image' | 'pdf' | 'excel' | 'other'
 type Status = 'pending' | 'uploading' | 'done' | 'error'
+type View = 'grid' | 'list'
 type Item = {
   id: string
   name: string
@@ -84,16 +87,32 @@ const AddFilesButton = asUploadButton(
   ))
 )
 
-function Thumb({ it }: { it: Item }) {
+function Thumb({ it, iconSize = 36 }: { it: Item; iconSize?: number }) {
   if (it.kind === 'image') {
     return <img src={it.serverUrl ?? it.localUrl} alt={it.name} className="h-full w-full object-cover" />
   }
   const Icon = it.kind === 'pdf' ? FileText : it.kind === 'excel' ? FileSpreadsheet : FileIcon
   return (
     <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-      <Icon size={36} />
+      <Icon size={iconSize} />
     </div>
   )
+}
+
+function StatusBadge({ status }: { status: Status }) {
+  if (status === 'done')
+    return (
+      <span className="flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+        <Check size={12} />
+      </span>
+    )
+  if (status === 'error')
+    return (
+      <span className="flex size-5 items-center justify-center rounded-full bg-destructive text-white">
+        <X size={12} />
+      </span>
+    )
+  return null
 }
 
 function Manager() {
@@ -101,6 +120,7 @@ function Manager() {
   const itemsRef = useRef<Item[]>([])
   itemsRef.current = items // synchronous snapshot for the add listener's limit checks
   const [notice, setNotice] = useState<string | null>(null)
+  const [view, setView] = useState<View>('grid')
 
   const abortItem = useAbortItem()
   const { processPending } = useUploady()
@@ -178,11 +198,25 @@ function Manager() {
   }
 
   const startUpload = () => {
-    // The server keeps only the latest upload, so drop already-finished items from
-    // the gallery (their files are about to be replaced) and send the pending set.
-    setItems((prev) => prev.filter((it) => it.status !== 'done'))
+    // The server keeps only the latest upload, so drop already-finished items, and
+    // flip pending → uploading right away so the progress UI shows even on a fast
+    // (localhost) upload that would otherwise jump straight to "done".
+    setItems((prev) =>
+      prev
+        .filter((it) => it.status !== 'done')
+        .map((it) => (it.status === 'pending' ? { ...it, status: 'uploading', progress: 0 } : it))
+    )
     setNotice(null)
     processPending()
+  }
+
+  const doRetry = (id?: string) => {
+    setItems((prev) =>
+      prev.map((it) =>
+        (id ? it.id === id : it.status === 'error') ? { ...it, status: 'uploading', progress: 0 } : it
+      )
+    )
+    retry(id)
   }
 
   if (!items.length) return null
@@ -192,8 +226,10 @@ function Manager() {
   const uploading = items.some((it) => it.status === 'uploading')
   const active = items.filter((it) => it.status === 'uploading' || it.status === 'done')
   const overall = active.length
-    ? Math.round(active.reduce((s, it) => s + it.size * it.progress, 0) /
-        active.reduce((s, it) => s + it.size, 0))
+    ? Math.round(
+        active.reduce((s, it) => s + it.size * it.progress, 0) /
+          active.reduce((s, it) => s + it.size, 0)
+      )
     : 0
   const totalSize = items.reduce((s, it) => s + it.size, 0)
 
@@ -202,31 +238,57 @@ function Manager() {
       {/* Action bar */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-3">
         <span className="text-sm text-muted-foreground">
-          {items.length} file{items.length > 1 ? 's' : ''} · {formatSize(totalSize)} / {formatSize(MAX_TOTAL)}
+          {items.length} file{items.length > 1 ? 's' : ''} · {formatSize(totalSize)} /{' '}
+          {formatSize(MAX_TOTAL)}
         </span>
-        <div className="ml-auto flex items-center gap-2">
-          {failed > 0 && (
-            <button
-              type="button"
-              onClick={() => retry()}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
-            >
-              <RotateCcw size={14} />
-              Retry failed ({failed})
-            </button>
-          )}
-          {pending > 0 && (
-            <button
-              type="button"
-              onClick={startUpload}
-              disabled={uploading}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
-            >
-              <UploadCloud size={15} />
-              Upload {pending} file{pending > 1 ? 's' : ''}
-            </button>
-          )}
+
+        {/* Grid / list toggle */}
+        <div className="ml-auto flex items-center rounded-md border border-border p-0.5">
+          <button
+            type="button"
+            onClick={() => setView('grid')}
+            title="Grid view"
+            aria-pressed={view === 'grid'}
+            className={`flex size-7 items-center justify-center rounded ${
+              view === 'grid' ? 'bg-secondary text-foreground' : 'text-muted-foreground'
+            }`}
+          >
+            <LayoutGrid size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setView('list')}
+            title="List view"
+            aria-pressed={view === 'list'}
+            className={`flex size-7 items-center justify-center rounded ${
+              view === 'list' ? 'bg-secondary text-foreground' : 'text-muted-foreground'
+            }`}
+          >
+            <ListIcon size={15} />
+          </button>
         </div>
+
+        {failed > 0 && (
+          <button
+            type="button"
+            onClick={() => doRetry()}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+          >
+            <RotateCcw size={14} />
+            Retry failed ({failed})
+          </button>
+        )}
+        {pending > 0 && (
+          <button
+            type="button"
+            onClick={startUpload}
+            disabled={uploading}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
+          >
+            <UploadCloud size={15} />
+            Upload {pending} file{pending > 1 ? 's' : ''}
+          </button>
+        )}
       </div>
 
       {/* Overall progress bar (while a batch is uploading) */}
@@ -242,85 +304,150 @@ function Manager() {
         </div>
       )}
 
-      {notice && (
-        <p className="px-4 pb-2 text-xs text-destructive">{notice}</p>
-      )}
+      {notice && <p className="px-4 pb-2 text-xs text-destructive">{notice}</p>}
 
-      {/* Items */}
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 px-4 pb-4">
-        {items.map((it) => (
-          <figure key={it.id} className="overflow-hidden rounded-[10px] border border-border bg-card">
-            <div className="relative aspect-square bg-secondary">
-              <Thumb it={it} />
-
-              {it.status === 'uploading' && (
-                <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/25">
-                  <div
-                    className="h-full bg-primary transition-[width] duration-200"
-                    style={{ width: `${it.progress}%` }}
-                  />
+      {/* Items — grid or list */}
+      {view === 'grid' ? (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 px-4 pb-4">
+          {items.map((it) => (
+            <figure key={it.id} className="overflow-hidden rounded-[10px] border border-border bg-card">
+              <div className="relative aspect-square bg-secondary">
+                <Thumb it={it} />
+                {it.status === 'uploading' && (
+                  <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/25">
+                    <div
+                      className="h-full bg-primary transition-[width] duration-200"
+                      style={{ width: `${it.progress}%` }}
+                    />
+                  </div>
+                )}
+                <span className="absolute top-1.5 right-1.5">
+                  {it.status === 'pending' ? (
+                    <button
+                      type="button"
+                      onClick={() => remove(it)}
+                      title="Remove"
+                      className="flex size-5 items-center justify-center rounded-full bg-black/55 text-white transition-colors hover:bg-black/75"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  ) : (
+                    <StatusBadge status={it.status} />
+                  )}
+                </span>
+              </div>
+              <figcaption className="flex items-center justify-between gap-1 px-2 py-1.5 text-xs">
+                <span className="truncate text-foreground" title={it.name}>
+                  {it.name}
+                </span>
+                <ItemAction it={it} onRetry={() => doRetry(it.id)} />
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : (
+        <ul className="flex flex-col gap-2 px-4 pb-4">
+          {items.map((it) => (
+            <li
+              key={it.id}
+              className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5 transition-colors hover:border-primary/40 hover:bg-secondary"
+            >
+              <div className="relative size-10 shrink-0 overflow-hidden rounded-md bg-secondary">
+                <Thumb it={it} iconSize={18} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm text-foreground" title={it.name}>
+                    {it.name}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{formatSize(it.size)}</span>
                 </div>
-              )}
-
-              {/* Status badge */}
-              <span className="absolute top-1.5 right-1.5">
-                {it.status === 'done' && (
-                  <span className="flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                    <Check size={12} />
+                {it.status === 'uploading' ? (
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full bg-primary transition-[width] duration-200"
+                      style={{ width: `${it.progress}%` }}
+                    />
+                  </div>
+                ) : (
+                  <span
+                    className={`text-xs ${
+                      it.status === 'error' ? 'text-destructive' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {it.status === 'done' ? 'Uploaded' : it.status === 'error' ? 'Failed' : 'Ready'}
                   </span>
                 )}
-                {it.status === 'error' && (
-                  <span className="flex size-5 items-center justify-center rounded-full bg-destructive text-white">
-                    <X size={12} />
-                  </span>
-                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
                 {it.status === 'pending' && (
                   <button
                     type="button"
                     onClick={() => remove(it)}
                     title="Remove"
-                    className="flex size-5 items-center justify-center rounded-full bg-black/55 text-white transition-colors hover:bg-black/75"
+                    className="text-muted-foreground hover:text-destructive"
                   >
-                    <Trash2 size={11} />
+                    <Trash2 size={15} />
                   </button>
                 )}
-              </span>
-            </div>
-
-            <figcaption className="flex items-center justify-between gap-1 px-2 py-1.5 text-xs">
-              <span className="truncate text-foreground" title={it.name}>
-                {it.name}
-              </span>
-              {it.status === 'done' && it.serverUrl ? (
-                <a
-                  href={it.serverUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  title="View the stored file on the server"
-                  className="shrink-0 text-primary hover:text-primary-hover"
-                >
-                  <ExternalLink size={13} />
-                </a>
-              ) : it.status === 'error' ? (
-                <button
-                  type="button"
-                  onClick={() => retry(it.id)}
-                  title="Retry this upload"
-                  className="inline-flex shrink-0 items-center gap-0.5 text-destructive hover:opacity-80"
-                >
-                  <RotateCcw size={12} /> retry
-                </button>
-              ) : it.status === 'uploading' ? (
-                <span className="shrink-0 text-muted-foreground">{it.progress}%</span>
-              ) : (
-                <span className="shrink-0 text-muted-foreground">{formatSize(it.size)}</span>
-              )}
-            </figcaption>
-          </figure>
-        ))}
-      </div>
+                {it.status === 'error' && (
+                  <button
+                    type="button"
+                    onClick={() => doRetry(it.id)}
+                    title="Retry"
+                    className="inline-flex items-center gap-0.5 text-sm text-destructive hover:opacity-80"
+                  >
+                    <RotateCcw size={14} /> retry
+                  </button>
+                )}
+                {it.status === 'done' && it.serverUrl && (
+                  <a
+                    href={it.serverUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="View the stored file on the server"
+                    className="text-primary hover:text-primary-hover"
+                  >
+                    <ExternalLink size={15} />
+                  </a>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
+}
+
+// The right-hand control in a grid card's caption (view link / retry / size / %).
+function ItemAction({ it, onRetry }: { it: Item; onRetry: () => void }) {
+  if (it.status === 'done' && it.serverUrl)
+    return (
+      <a
+        href={it.serverUrl}
+        target="_blank"
+        rel="noreferrer"
+        title="View the stored file on the server"
+        className="shrink-0 text-primary hover:text-primary-hover"
+      >
+        <ExternalLink size={13} />
+      </a>
+    )
+  if (it.status === 'error')
+    return (
+      <button
+        type="button"
+        onClick={onRetry}
+        title="Retry this upload"
+        className="inline-flex shrink-0 items-center gap-0.5 text-destructive hover:opacity-80"
+      >
+        <RotateCcw size={12} /> retry
+      </button>
+    )
+  if (it.status === 'uploading')
+    return <span className="shrink-0 text-muted-foreground">{it.progress}%</span>
+  return <span className="shrink-0 text-muted-foreground">{formatSize(it.size)}</span>
 }
 
 export function Uploader() {
