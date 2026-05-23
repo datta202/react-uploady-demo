@@ -29,7 +29,7 @@ function App() {
       <header>
         <h1 className="text-3xl font-bold text-heading">File Uploader</h1>
         <p className="mt-1 text-prose-muted">
-          Drag-and-drop image uploads on{' '}
+          Drag-and-drop file uploads on{' '}
           <a
             href="https://react-uploady.org"
             target="_blank"
@@ -38,7 +38,8 @@ function App() {
           >
             react-uploady
           </a>
-          , with live progress and a real Node/Express backend that stores and serves the files.
+          {' '}— add, remove, then upload (images, PDFs, Excel), with live progress and a real
+          Node/Express backend that stores and serves the files.
         </p>
       </header>
       <Uploader />

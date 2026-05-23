@@ -11,9 +11,11 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@rpldy/upload-button": "^1.10.0",
-    "@rpldy/upload-drop-zone": "^1.10.0",
-    "@rpldy/uploady": "^1.10.0",
+    "@rpldy/retry": "^1.13.0",
+    "@rpldy/retry-hooks": "^1.13.0",
+    "@rpldy/upload-button": "^1.13.0",
+    "@rpldy/upload-drop-zone": "^1.13.0",
+    "@rpldy/uploady": "^1.13.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.475.0",
     "react": "^19.2.0",

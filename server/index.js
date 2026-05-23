@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import cors from 'cors'
@@ -13,42 +13,85 @@ const PORT = process.env.PORT || 3002
 // prod: the nginx path that proxies to this service (set via env).
 const PUBLIC_BASE = process.env.PUBLIC_BASE ?? `http://localhost:${PORT}`
 
-const MAX_SIZE = 5 * 1024 * 1024 // 5 MB
-const MAX_FILES = 10
+const MAX_FILES = 5
+const MAX_TOTAL = 50 * 1024 * 1024 // 50 MB across the whole batch
 const ALLOWED = new Set([
   'image/png',
   'image/jpeg',
   'image/gif',
   'image/webp',
   'image/avif',
+  'application/pdf',
+  'application/vnd.ms-excel', // .xls
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
 ])
-const TTL_MS = 60 * 60 * 1000 // delete uploads older than 1h (ephemeral demo)
+// Some browsers send .xls/.xlsx as octet-stream — accept by extension too.
+const ALLOWED_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.pdf', '.xls', '.xlsx'])
 
 mkdirSync(UPLOAD_DIR, { recursive: true })
 
 const storage = multer.diskStorage({
   destination: UPLOAD_DIR,
-  filename: (_req, file, cb) =>
-    cb(null, randomUUID() + extname(file.originalname).toLowerCase()),
+  filename: (_req, file, cb) => cb(null, randomUUID() + extname(file.originalname).toLowerCase()),
 })
 const upload = multer({
   storage,
-  limits: { fileSize: MAX_SIZE, files: MAX_FILES },
-  fileFilter: (_req, file, cb) => cb(null, ALLOWED.has(file.mimetype)),
+  // Per-file cap = the whole-batch cap; the total is checked again below.
+  limits: { fileSize: MAX_TOTAL, files: MAX_FILES },
+  fileFilter: (_req, file, cb) =>
+    cb(null, ALLOWED.has(file.mimetype) || ALLOWED_EXT.has(extname(file.originalname).toLowerCase())),
 })
+
+// Delete everything in the uploads dir except the named files (keep only the
+// latest upload — no separate cleanup/janitor needed).
+function keepOnly(filenames) {
+  const keep = new Set(filenames)
+  for (const f of readdirSync(UPLOAD_DIR)) {
+    if (!keep.has(f)) {
+      try {
+        unlinkSync(join(UPLOAD_DIR, f))
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
 
 const app = express()
 app.use(cors()) // dev is cross-origin; prod is same-origin via the nginx proxy
 
-// react-uploady posts each file under the "file" field by default.
+// react-uploady posts the files under the "file" field (grouped → one request).
 app.post('/upload', upload.array('file', MAX_FILES), (req, res) => {
-  const files = (req.files ?? []).map((f) => ({
-    name: f.originalname,
-    size: f.size,
-    mime: f.mimetype,
-    url: `${PUBLIC_BASE}/files/${f.filename}`,
-  }))
-  res.json({ files })
+  const uploaded = req.files ?? []
+  // Nothing valid got through fileFilter — don't disturb what's already stored.
+  if (!uploaded.length) {
+    return res.status(400).json({ error: 'No supported files in the upload' })
+  }
+  const total = uploaded.reduce((s, f) => s + f.size, 0)
+
+  // Reject an over-budget batch without disturbing what's already stored.
+  if (total > MAX_TOTAL) {
+    for (const f of uploaded) {
+      try {
+        unlinkSync(f.path)
+      } catch {
+        /* ignore */
+      }
+    }
+    return res.status(413).json({ error: `Batch exceeds ${MAX_TOTAL / 1024 / 1024} MB` })
+  }
+
+  // This batch becomes the only thing in storage.
+  keepOnly(uploaded.map((f) => f.filename))
+
+  res.json({
+    files: uploaded.map((f) => ({
+      name: f.originalname,
+      size: f.size,
+      mime: f.mimetype,
+      url: `${PUBLIC_BASE}/files/${f.filename}`,
+    })),
+  })
 })
 
 app.get('/files/:name', (req, res) => {
@@ -61,17 +104,19 @@ app.get('/files/:name', (req, res) => {
 
 app.get('/health', (_req, res) => res.json({ ok: true }))
 
-// Periodically clear old uploads so the demo can't fill the disk.
-setInterval(() => {
-  const now = Date.now()
-  for (const f of readdirSync(UPLOAD_DIR)) {
-    const p = join(UPLOAD_DIR, f)
-    try {
-      if (now - statSync(p).mtimeMs > TTL_MS) unlinkSync(p)
-    } catch {
-      /* ignore */
-    }
+// Turn multer rejections (size/count) into JSON the client can show.
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
+  if (err instanceof multer.MulterError) {
+    const msg =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? `A file exceeds the ${MAX_TOTAL / 1024 / 1024} MB limit`
+        : err.code === 'LIMIT_FILE_COUNT'
+          ? `Too many files (max ${MAX_FILES})`
+          : err.message
+    return res.status(413).json({ error: msg })
   }
-}, 10 * 60 * 1000)
+  res.status(500).json({ error: 'Upload failed' })
+})
 
 app.listen(PORT, () => console.log(`upload server listening on :${PORT}`))
